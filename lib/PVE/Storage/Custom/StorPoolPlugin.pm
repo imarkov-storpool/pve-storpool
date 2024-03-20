@@ -139,6 +139,11 @@ sub log_and_die($) {
     croak "$msg\n";
 }
 
+sub log_info($) {
+    my ($msg) = @_;
+    syslog 'info', 'StorPool plugin: %s', $msg;
+}
+
 # Wrapper functions for the actual request
 sub sp_get($$) {
 	my ($cfg, $addr) = @_;
@@ -334,12 +339,16 @@ sub sp_temp_status($) {
 }
 
 #TODO, if adding more nodes, iso need to be attached to them as well
-sub sp_vol_attach($$$$$;$) {
-	my ($cfg, $global_id, $spid, $perms, $ignoreError, $is_snapshot) = @_;
+sub sp_vol_attach($$$$$;$$) {
+	my ($cfg, $global_id, $spid, $perms, $ignoreError, $is_snapshot, $force_detach_all) = @_;
 	
 	my $res;
         my $keyword = $is_snapshot ? 'snapshot' : 'volume';
-        my $req = [{ $keyword => "~$global_id", $perms => [$spid], 'force' => JSON::false }];
+        my $req = [{
+            $keyword => "~$global_id",
+            $perms => [$spid],
+            ($force_detach_all ? ('detach' => 'all', 'force' => JSON::true) : ()),
+        }];
         $res = sp_post($cfg, "VolumesReassignWait", $req);
 	
 	die "Storpool: $global_id, $spid, $perms, $ignoreError: ".$res->{'error'}->{'descr'} if (!$ignoreError && $res->{'error'});
@@ -1057,6 +1066,23 @@ sub filesystem_path {
     return wantarray ? ($path, $vmid, $vtype) : $path;
 }
 
+sub get_vm_status {
+    my ($vmid) = @_;
+    my $all_vms = do {
+        open(my $f, '-|', 'pvesh', 'get', 'cluster/resources', '-type', 'vm', '--output-format', 'json') or log_and_die("pvesh failed: $!");
+        my $pvesh_output = do {
+            local $/;
+            <$f>
+        };
+        my $status = decode_json($pvesh_output);
+        close($f) or log_and_die($! == 0 ? "pvesh exited with code $?" : "reading pvesh output failed: $!");
+        $status;
+    };
+    my $vm_status = first { $_->{"vmid"} == $vmid } @{$all_vms} or log_and_die("Could not find VM $vmid in cluster resources");
+    log_info("VM $vmid parsed status:\n".Dumper($vm_status));
+    return $vm_status;
+}
+
 sub activate_volume {
     my ($class, $storeid, $scfg, $volname, $exclusive, $cache) = @_;
     my $cfg = sp_cfg($scfg, $storeid);
@@ -1068,8 +1094,23 @@ sub activate_volume {
 
     my $perms = $vol->{'snapshot'} ? 'ro' : 'rw';
 
+    my $vmid = $vol->{'tags'}->{VTAG_VM()};
+    my $force_detach = 0;
+    if (!sp_is_empty($vmid)) {
+        log_info("Volume $vol->{'name'} is related to VM $vmid, checking status");
+        my $vm_status = get_vm_status($vmid);
+        if (($vm_status->{'lock'} // '') ne 'migrate' && ($vm_status->{'hastate'} // '') ne 'migrate') {
+            log_info("NOT a live migration of VM $vmid, will force detach volume $vol->{'name'}");
+            $force_detach = 1;
+        } else {
+            log_info("Live migration of VM $vmid, will not force detach volume $vol->{'name'}");
+        }
+    } else {
+        log_info("Volume $vol->{'name'} is not related to a VM, not checking status");
+    }
+
     # TODO: pp: remove this when the configuration goes into the plugin?
-    sp_vol_attach($cfg, $global_id, $cfg->{'api'}->{'ourid'}, $perms, 0, $vol->{'snapshot'});
+    sp_vol_attach($cfg, $global_id, $cfg->{'api'}->{'ourid'}, $perms, 0, $vol->{'snapshot'}, $force_detach);
     log_and_die "Internal StorPool error: could not find the just-attached volume $global_id at $path" unless -e $path;
 }
 
