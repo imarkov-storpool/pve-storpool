@@ -9,6 +9,7 @@ PVE_MODULES= \
 PREFIX?=	/usr
 SHAREDIR?=	${PREFIX}/share
 PVE_PERL?=	${SHAREDIR}/perl5
+LIB_SP?=    ${PREFIX}/lib/storpool
 
 BINOWN?=	root
 BINGRP?=	root
@@ -35,10 +36,14 @@ install: all
 				${INSTALL_DATA} -- "lib/$$relpath" "${DESTDIR}${PVE_PERL}/$$relpath"; \
 			done; \
 			\
-			install -o root -g root --mode 0644 sp-watchdog-mux.service /lib/systemd/system/sp-watchdog-mux.service; \
-			install -o root -g root --mode 0755 set-pve-watchdog /usr/lib/storpool/set-pve-watchdog; \
+			${MKDIR_P} -- "${DESTDIR}${LIB_SP}"; \
+			${INSTALL_PROGRAM} -- set-pve-watchdog "${DESTDIR}${LIB_SP}/set-pve-watchdog"; \
+			\
+			${INSTALL_DATA} -- sp-watchdog-mux.service "${DESTDIR}/lib/systemd/system/sp-watchdog-mux.service"; \
     		systemctl daemon-reload; \
-			systemctl mask --now sp-watchdog-mux.service; \
+			if ! systemctl is-active sp-watchdog-mux.service; then \
+				systemctl mask --now sp-watchdog-mux.service; \
+			fi; \
 		}
 
 clean:
