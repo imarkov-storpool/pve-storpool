@@ -23,7 +23,7 @@ use JSON;
 use LWP::UserAgent;
 use LWP::Simple;
 
-use version; our $VERSION = version->declare("v0.3.2");
+use version; our $VERSION = version->declare("v0.3.3");
 use base qw(PVE::Storage::Plugin);
 
 my ($RE_DISK_ID, $RE_GLOBAL_ID, $RE_PROXMOX_ID, $RE_VM_ID);
