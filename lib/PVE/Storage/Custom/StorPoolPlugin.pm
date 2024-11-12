@@ -1561,6 +1561,45 @@ sub rename_volume($$$$$$) {
     "$storeid:".sp_encode_volsnap_from_tags($updated)
 }
 
+sub volumes_atomic_snapshot_possible {
+	my ($class, $voldata) = @_;
+
+	return 1;
+}
+
+sub atomic_snapshot_preferred {
+	my ($class, $voldata) = @_;
+
+	return 1;
+}
+
+# Performs an atomic (crash-consistent) snapshot of all volumes at once.
+sub volumes_atomic_snapshot {
+	my ($class, $voldata, $snapname) = @_;
+
+    my ($sp_cfg, @volumes);
+    for my $volname (keys %{$voldata}) {
+        $sp_cfg = sp_cfg(
+            $voldata->{$volname}->{'scfg'},
+            $voldata->{$volname}->{'storeid'},
+        );
+        my $vol = sp_decode_volsnap_to_tags($volname, $sp_cfg);
+        my %snap_spec = (
+            volume => $vol->{'name'},
+            tags => {
+                %{$vol->{'tags'}},
+                sp_get_tags($sp_cfg),
+                VTAG_SNAP() => $snapname,
+                VTAG_SNAP_PARENT() => $vol->{'globalId'},
+			},
+        );
+        push(@volumes, \%snap_spec);  
+    }
+
+    my $res = sp_post($sp_cfg, "VolumesGroupSnapshot", { volumes => \@volumes });
+	die "Storpool: ".$res->{'error'}->{'descr'} if ($res->{'error'});
+}
+
 1;
 #TODO when creating new storage, fix placementgroups
 #TODO detach on normal shutdown (maybe done)
